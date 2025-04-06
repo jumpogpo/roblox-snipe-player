@@ -1,15 +1,27 @@
-const axios = require("axios");
-const { HttpsProxyAgent } = require("https-proxy-agent");
-const fs = require("fs");
+import axios from "axios";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import fs from "fs";
+import chalk from "chalk";
 
 const BATCH_SIZE = 100; // Maximum batch size for API
-const MAX_RETRIES = 5;
+const MAX_RETRIES = Infinity; // Changed from 5 to Infinity to retry indefinitely
 const BASE_DELAY = 200; // Reduced delay between requests
 const BACKOFF_FACTOR = 1.5; // Reduced backoff factor for faster retry
 const MAX_CONCURRENT_BATCHES = 8; // Number of concurrent batch requests
 
 // Add delay function
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Color log functions
+const log = {
+  info: (message) => console.log(chalk.blue(message)),
+  success: (message) => console.log(chalk.green(message)),
+  error: (message) => console.log(chalk.red(message)),
+  warning: (message) => console.log(chalk.yellow(message)),
+  highlight: (message) => console.log(chalk.cyan(message)),
+  debug: (message) => console.log(chalk.magenta(message)),
+  serverId: (message) => console.log(chalk.bold.bgGreen.white(message)),
+};
 
 // Proxy configuration
 let proxyList = [];
@@ -35,10 +47,10 @@ function loadProxiesFromFile(filePath = "proxy.txt") {
       };
     });
 
-    console.log(`Loaded ${proxyList.length} proxies from ${filePath}`);
+    log.success(`Loaded ${proxyList.length} proxies from ${filePath}`);
     return proxyList.length > 0;
   } catch (error) {
-    console.error(`Error loading proxies: ${error.message}`);
+    log.error(`Error loading proxies: ${error.message}`);
     return false;
   }
 }
@@ -62,7 +74,7 @@ const setupAxiosWithProxy = (proxyUrl) => {
       timeout: 10000, // Add timeout to avoid hanging requests
     });
   } catch (error) {
-    console.error(`Error creating proxy agent: ${error.message}`);
+    log.error(`Error creating proxy agent: ${error.message}`);
     return axios; // Fallback to regular axios
   }
 };
@@ -92,13 +104,13 @@ async function getTargetUserId(username) {
     );
 
     if (response.data.data.length === 0) {
-      console.log(`User ${username} not found`);
+      log.warning(`User ${username} not found`);
       return null;
     }
 
     return response.data.data[0].id;
   } catch (error) {
-    console.log(`Error getting user ID: ${error.message}`);
+    log.error(`Error getting user ID: ${error.message}`);
     return null;
   }
 }
@@ -126,13 +138,13 @@ async function getTargetProfileURL(userId) {
     });
 
     if (!response.data.data[0] || !response.data.data[0].imageUrl) {
-      console.log(`Could not get profile image for userId ${userId}`);
+      log.warning(`Could not get profile image for userId ${userId}`);
       return null;
     }
 
     return response.data.data[0].imageUrl;
   } catch (error) {
-    console.log(`Error getting target profile URL: ${error.message}`);
+    log.error(`Error getting target profile URL: ${error.message}`);
     return null;
   }
 }
@@ -176,7 +188,7 @@ async function getProfilesByTokensWithRequestId(tokens, requestIds) {
 
     return profileMap;
   } catch (error) {
-    console.log(`Error getting profiles: ${error.message}`);
+    log.error(`Error getting profiles: ${error.message}`);
     return {};
   }
 }
@@ -223,7 +235,7 @@ async function searchServersForTarget(
 ) {
   // If target already found in another search, abort immediately
   if (TARGET_FOUND) {
-    console.log(
+    log.warning(
       `Aborting search on page ${pageNum} - target already found elsewhere`
     );
     return { found: false, aborted: true };
@@ -236,7 +248,7 @@ async function searchServersForTarget(
     // Minimal delay between requests
     await delay(100);
 
-    console.log(
+    log.info(
       `Loading servers page ${pageNum} | Cursor: ${cursor || "initial"}`
     );
 
@@ -251,13 +263,13 @@ async function searchServersForTarget(
 
     const servers = response.data.data;
     if (!servers || servers.length === 0) {
-      console.log(`No servers found on page ${pageNum}`);
+      log.warning(`No servers found on page ${pageNum}`);
       return { found: false, error: "No servers found" };
     }
 
     // Check if target already found while we were fetching
     if (TARGET_FOUND) {
-      console.log(
+      log.warning(
         `Aborting search on page ${pageNum} - target found elsewhere while fetching`
       );
       return { found: false, aborted: true };
@@ -268,7 +280,7 @@ async function searchServersForTarget(
     let nextPagePromise = null;
     let nextPageCancelable = null;
     if (response.data.nextPageCursor) {
-      console.log(
+      log.debug(
         `Pre-fetching next page (${pageNum + 1}) while processing current page`
       );
       // Start fetching the next page without waiting for this one to complete
@@ -282,7 +294,7 @@ async function searchServersForTarget(
       nextPageCancelable = createCancelablePromise(nextPagePromise);
     }
 
-    console.log(
+    log.info(
       `Page ${pageNum}: Processing ${
         servers.length
       } servers with ${servers.reduce(
@@ -328,7 +340,7 @@ async function searchServersForTarget(
       });
     }
 
-    console.log(
+    log.info(
       `Processing ${batches.length} batches in parallel groups of ${MAX_CONCURRENT_BATCHES}`
     );
 
@@ -343,7 +355,7 @@ async function searchServersForTarget(
     ) {
       // Check if target already found in another search
       if (TARGET_FOUND) {
-        console.log(
+        log.warning(
           `Aborting batch processing - target already found elsewhere`
         );
         break;
@@ -351,7 +363,7 @@ async function searchServersForTarget(
 
       const batchGroup = batches.slice(i, i + MAX_CONCURRENT_BATCHES);
 
-      console.log(
+      log.debug(
         `Processing batch group ${
           Math.floor(i / MAX_CONCURRENT_BATCHES) + 1
         }/${Math.ceil(batches.length / MAX_CONCURRENT_BATCHES)}`
@@ -365,7 +377,7 @@ async function searchServersForTarget(
         }
 
         try {
-          console.log(
+          log.debug(
             `Starting batch ${i + idx + 1}/${batches.length} with ${
               batch.tokens.length
             } tokens`
@@ -393,12 +405,8 @@ async function searchServersForTarget(
 
             if (profileMap[token].imageUrl === targetProfileURL) {
               const serverId = profileMap[token].requestId;
-              console.log(
-                `\n✅ MATCH FOUND! Token: ${token.slice(
-                  0,
-                  10
-                )}..., Server: ${serverId}`
-              );
+              log.success(`\n✅ MATCH FOUND! Token: ${token.slice(0, 10)}...`);
+              log.serverId(`Server ID: ${serverId}`);
 
               // Set global flag so other searches can abort
               TARGET_FOUND = true;
@@ -418,7 +426,7 @@ async function searchServersForTarget(
           if (TARGET_FOUND) {
             return { found: false, aborted: true };
           }
-          console.log(`Error in batch ${i + idx + 1}: ${error.message}`);
+          log.error(`Error in batch ${i + idx + 1}: ${error.message}`);
           return { found: false, error: error.message };
         }
       });
@@ -435,7 +443,7 @@ async function searchServersForTarget(
         matchFound = true;
         foundServer = serverMap[matchResult.serverId];
         foundToken = matchResult.token;
-        console.log(
+        log.success(
           `✅ Found match in batch ${matchResult.batchIndex + 1}/${
             batches.length
           }`
@@ -446,7 +454,7 @@ async function searchServersForTarget(
 
         // Cancel the next page request
         if (nextPageCancelable) {
-          console.log(`Canceling next page fetching`);
+          log.info(`Canceling next page fetching`);
           nextPageCancelable.cancel();
         }
 
@@ -455,12 +463,13 @@ async function searchServersForTarget(
     }
 
     if (matchFound && foundServer) {
-      console.log(`\n✅ TARGET FOUND in server ${foundServer.id}!`);
-      console.log(`Server details:`, foundServer);
-      console.log(
+      log.success(`\n✅ TARGET FOUND!`);
+      log.serverId(`SERVER ID: ${foundServer.id}`);
+      log.info(`Server details:`, foundServer);
+      log.highlight(
         `Command: Roblox.GameLauncher.joinGameInstance(${placeId}, "${foundServer.id}")`
       );
-      console.log(
+      log.success(
         `\nSUCCESS: Target found! All other searches will be terminated.`
       );
 
@@ -477,7 +486,7 @@ async function searchServersForTarget(
 
     // If target was found in another search while we were processing
     if (TARGET_FOUND) {
-      console.log(`Stopping page ${pageNum} search - target found elsewhere`);
+      log.warning(`Stopping page ${pageNum} search - target found elsewhere`);
       // Cancel next page request if it exists
       if (nextPageCancelable) {
         nextPageCancelable.cancel();
@@ -487,7 +496,7 @@ async function searchServersForTarget(
 
     // If we were pre-fetching the next page, wait for its result
     if (nextPagePromise && !TARGET_FOUND) {
-      console.log(`Waiting for pre-fetched next page (${pageNum + 1}) results`);
+      log.debug(`Waiting for pre-fetched next page (${pageNum + 1}) results`);
       try {
         const nextPageResult = await nextPagePromise;
         // If it's a silent abort, don't show any messages
@@ -503,37 +512,40 @@ async function searchServersForTarget(
 
         // Only show error if we haven't found the target elsewhere
         if (!TARGET_FOUND) {
-          console.log(`Error from next page promise: ${error}`);
+          log.error(`Error from next page promise: ${error}`);
         }
         return { found: false, error: "Next page error" };
       }
     } else {
-      console.log(`Finished searching all server pages. Target not found.`);
+      log.warning(`Finished searching all server pages. Target not found.`);
       return { found: false };
     }
   } catch (error) {
     // If target was found while we were handling an error
     if (TARGET_FOUND) {
-      console.log(
+      log.warning(
         `Aborting error handling on page ${pageNum} - target found elsewhere`
       );
       return { found: false, aborted: true };
     }
 
-    console.log(`Error on page ${pageNum}: ${error.message}`);
+    log.error(`Error on page ${pageNum}: ${error.message}`);
 
-    // Handle rate limiting with minimal backoff
-    if (
-      error.response &&
-      error.response.status === 429 &&
-      retryCount < MAX_RETRIES
-    ) {
-      console.log(
+    // Handle rate limiting with unlimited retries
+    if (error.response && error.response.status === 429) {
+      log.warning(
         `Rate limited on page ${pageNum}, retrying after delay... (Attempt ${
           retryCount + 1
         })`
       );
-      const backoffTime = BASE_DELAY * Math.pow(BACKOFF_FACTOR, retryCount);
+      const backoffTime =
+        BASE_DELAY *
+        Math.pow(
+          BACKOFF_FACTOR,
+          // Cap the backoff exponent to avoid extremely long delays after many retries
+          Math.min(retryCount, 10)
+        );
+      log.info(`Waiting ${backoffTime}ms before retry`);
       await delay(backoffTime);
       return await searchServersForTarget(
         placeId,
@@ -542,11 +554,6 @@ async function searchServersForTarget(
         pageNum,
         retryCount + 1
       );
-    } else if (retryCount >= MAX_RETRIES) {
-      console.log(
-        `Maximum retry attempts reached for page ${pageNum}. Aborting.`
-      );
-      return { found: false, error: "Max retries exceeded" };
     }
 
     return { found: false, error: error.message };
@@ -559,23 +566,23 @@ async function findTargetInServers(username, placeId) {
     // Reset the global flag at the start of a new search
     TARGET_FOUND = false;
 
-    console.log(`Starting search for ${username} in game ${placeId}`);
+    log.info(`Starting search for ${username} in game ${placeId}`);
 
     const targetUserId = await getTargetUserId(username);
     if (!targetUserId) {
-      console.log(`Could not find user ID for ${username}`);
+      log.error(`Could not find user ID for ${username}`);
       return { found: false, error: "User not found" };
     }
 
     const targetProfileURL = await getTargetProfileURL(targetUserId);
     if (!targetProfileURL) {
-      console.log(
+      log.error(
         `Could not get profile URL for ${username} (ID: ${targetUserId})`
       );
       return { found: false, error: "Profile image not found" };
     }
 
-    console.log(
+    log.highlight(
       `Target: ${username} | ID: ${targetUserId} | Profile: ${targetProfileURL}`
     );
 
@@ -584,24 +591,24 @@ async function findTargetInServers(username, placeId) {
 
     // Final status
     if (result.found) {
-      console.log(`\n✅ SEARCH COMPLETE: Found target successfully!`);
+      log.success(`\n✅ SEARCH COMPLETE: Found target successfully!`);
     } else if (TARGET_FOUND) {
-      console.log(`\n✅ SEARCH COMPLETE: Target was found in another search.`);
+      log.success(`\n✅ SEARCH COMPLETE: Target was found in another search.`);
     } else {
-      console.log(`\n❌ SEARCH COMPLETE: Target not found in any server.`);
+      log.error(`\n❌ SEARCH COMPLETE: Target not found in any server.`);
     }
 
     return result;
   } catch (error) {
     // If target was found in another process
     if (TARGET_FOUND) {
-      console.log(
+      log.warning(
         `Error in findTargetInServers but target was already found elsewhere.`
       );
       return { found: true, note: "Found elsewhere" };
     }
 
-    console.log(`Main search error: ${error.message}`);
+    log.error(`Main search error: ${error.message}`);
     return { found: false, error: error.message };
   }
 }
@@ -614,13 +621,18 @@ async function main() {
     // Load proxies
     const proxiesLoaded = loadProxiesFromFile();
     if (!proxiesLoaded) {
-      console.log("No proxies loaded. Using direct connection.");
+      log.warning("No proxies loaded. Using direct connection.");
     }
 
     const username = process.argv[2];
     const placeId = process.argv[3];
 
-    console.log(`Starting search for ${username} in place ${placeId}`);
+    if (!username || !placeId) {
+      log.error("Usage: bun main.js <username> <placeId>");
+      return { found: false, error: "Missing arguments" };
+    }
+
+    log.info(`Starting search for ${username} in place ${placeId}`);
 
     const result = await findTargetInServers(username, placeId);
 
@@ -628,7 +640,7 @@ async function main() {
 
     // Only show errors if target wasn't found
     if (!result.found && !TARGET_FOUND && result.error) {
-      console.log(`Search failed: ${result.error}`);
+      log.error(`Search failed: ${result.error}`);
     }
 
     return result;
@@ -639,16 +651,20 @@ async function main() {
       return { found: true, note: "Found but there was an error in main" };
     }
 
-    console.log(`Fatal error: ${error.message}`);
+    log.error(`Fatal error: ${error.message}`);
     console.timeEnd("searchTime");
     return { found: false, error: error.message };
   }
 }
 
-// Run if called directly
-if (require.main === module) {
+// Run program with direct execution
+// Different ways to detect direct execution
+if (
+  import.meta.url.includes(process.argv[1]) ||
+  process.argv[1].includes("main.js")
+) {
   main();
 }
 
 // Export for potential module use
-module.exports = { findTargetInServers, main };
+export { findTargetInServers, main };
