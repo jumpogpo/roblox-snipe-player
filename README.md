@@ -179,5 +179,5 @@ Please understand that while the tool uses advanced techniques to maximize succe
 ---
 
 <div align="center">
-  <p>Made with ❤️ by <a href="https://github.com/yourname">Your Name</a></p>
+  <p>Made with ❤️ by <a href="https://github.com/jumpogpo">Thanapat Koedpiam</a></p>
 </div>
